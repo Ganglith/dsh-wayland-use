@@ -22,6 +22,15 @@
 截图之所以能到 2ms：PipeWire 是**画面变化驱动**的，静止时不出帧，所以缓存帧就是
 当前画面；插件给每次输入动作打时间戳，帧比动作新就直接回缓存，不用重抓。
 
+## 截图
+
+![桌面截图](assets/screenshot-desktop.png)
+
+![OCR 带坐标读屏](assets/screenshot-read.png)
+
+下面这张是 `wayland_read` 的产物：图上每个框都是 OCR 认出的文字，框左上角的
+`文字 @x,y` 就是可以直接喂给 `wayland_act` 的 `click` 的逻辑坐标。
+
 ## 安装
 
 ```sh
