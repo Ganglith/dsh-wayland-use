@@ -34,7 +34,7 @@
 ## 安装
 
 ```sh
-dsh plugin add https://github.com/<owner>/dsh-wayland-use
+dsh plugin add https://github.com/Ganglith/dsh-wayland-use
 ```
 
 或手动装进 profile（`~/.dsh/profiles/<profile>/`）三处：
