@@ -239,7 +239,7 @@ function unpack(r) {
 }
 
 const STEP_DESC =
-  '一步操作：{op:"click",x,y,button,count} | {op:"clickText",text,nth} | {op:"type",text} | ' +
+  '一步操作：{op:"click",x,y,button,count} | {op:"clickText",text,nth,scroll} | {op:"type",text} | ' +
   '{op:"key",combo} | {op:"move",x,y} | {op:"scroll",dx,dy} | {op:"wait",ms} | ' +
   '{op:"waitText",text,gone,timeoutMs} | {op:"launch",command} | {op:"sleep",seconds}'
 
@@ -260,6 +260,17 @@ const STEP_SPEC = {
       count: { type: 'integer' },
       text: { type: 'string' },
       nth: { type: 'integer' },
+      scroll: { type: 'boolean', description: 'clickText 找不到时自动翻页（默认 true）' },
+      window: { type: 'string', description: 'clickText 前先把这个标题的窗口拉到前台（子串匹配）' },
+      dismissDialog: {
+        type: 'boolean',
+        description: 'clickText 找不到时顺手处理挡路的屏幕共享授权弹窗（默认 true）',
+      },
+      acceptShare: {
+        type: 'boolean',
+        description: '处理授权弹窗时按哪一边：true（默认）按「共享/允许」放行，' +
+          'false 按「取消」。远控（HopToDesk/ToDesk）要靠这个框拿画面，所以默认放行',
+      },
       combo: { type: 'string' },
       dx: { type: 'number' },
       dy: { type: 'number' },
@@ -408,8 +419,16 @@ export function apply(ctx) {
         '例子：[{op:"click",x:400,y:60},{op:"type",text:"你好"},{op:"key",combo:"Return"}]',
       parameters: {
         steps: { ...STEP_SPEC, required: true },
+        window: {
+          type: 'string',
+          description: '整串动作开始前先把标题含这段字的窗口拉到前台（子串匹配）；clickText 步没单独给 window 时沿用它',
+        },
         shot: { type: 'boolean', description: '结束后要不要截图，默认 true' },
         freshMs: { type: 'integer', description: '等新画面最多多久（默认 250）' },
+        acceptShare: {
+          type: 'boolean',
+          description: 'clickText 步遇到屏幕共享授权弹窗时按哪一边，默认 true（共享/放行）',
+        },
       },
       output: shotOutput,
       presentCall: present('Wayland act'),
@@ -418,8 +437,10 @@ export function apply(ctx) {
         if (!steps.length) throw new Error('steps 不能为空')
         const r = await rpc('act', {
           steps,
+          window: args.window,
           freshMs: args.freshMs ?? 250,
-        }, 60000)
+          acceptShare: args.acceptShare ?? true,
+        }, 120000)
         const did = (r.steps || []).join(' → ')
         if (args.shot === false) return { text: `已执行：${did}（${r.ms}ms）`, token: '' }
         const { buf, kb } = unpack(r)
@@ -432,7 +453,8 @@ export function apply(ctx) {
       name: 'wayland_click_text',
       description:
         '按屏幕上的文字点：识别 → 找到那段字 → 点它中心。不用先截图猜坐标。' +
-        '找到多个时用 nth 选第几个（按从上到下、从左到右）。',
+        '找到多个时用 nth 选第几个（按从上到下、从左到右）。' +
+        '当前视野没有就自己翻页继续找；要翻的是某个窗口里的内容时，用 window 给它标题字样。',
       parameters: {
         text: { type: 'string', required: true, description: '要点的文字（模糊包含即可，比如按钮上的字）' },
         nth: { type: 'integer', description: '第几个匹配，默认 0' },
@@ -447,6 +469,28 @@ export function apply(ctx) {
           },
           required: ['x', 'y', 'w', 'h'],
         },
+        scroll: {
+          type: 'boolean',
+          description: '当前视野没有就自己滚动翻页继续找，默认 true（在长列表、长文档里找东西时靠它）',
+        },
+        maxPages: { type: 'integer', description: '最多翻几屏，默认 24' },
+        delta: { type: 'number', description: '每屏滚多少，默认按区域高度自适应' },
+        window: {
+          type: 'string',
+          description: '先把标题含这段字的窗口拉到前台再找（子串匹配，比如 "long.txt"）。' +
+            '窗口被别的窗口盖住时必须给，否则滚轮翻的是上层窗口、永远找不到',
+        },
+        dismissDialog: {
+          type: 'boolean',
+          description: '找不到时顺手处理挡路的「屏幕共享授权」弹窗再找一遍，默认 true。' +
+            '默认按「共享/允许」放行 —— 那个框是 HopToDesk/ToDesk 这类远控拿画面用的，' +
+            '按掉它等于掐断别人的远程连接，所以只在确实要掐断时才把 acceptShare 设成 false',
+        },
+        acceptShare: {
+          type: 'boolean',
+          description: '处理授权弹窗时按哪一边，默认 true（共享/放行）。' +
+            '设 false 则按「取消」—— 会掐断正在等授权的远控连接',
+        },
       },
       output: textOutput,
       presentCall: present('Wayland click text'),
@@ -457,8 +501,16 @@ export function apply(ctx) {
           button: args.button || 'left',
           count: args.count ?? 1,
           region: args.region,
-        }, 45000)
-        return { text: `已点「${r.text}」@ (${r.x}, ${r.y})（${r.ms}ms）` }
+          scroll: args.scroll ?? true,
+          maxPages: args.maxPages ?? 24,
+          delta: args.delta,
+          window: args.window,
+          dismissDialog: args.dismissDialog ?? true,
+          acceptShare: args.acceptShare ?? true,
+        }, 120000)
+        const pages = r.pages ? `，翻了 ${r.pages} 屏` : ''
+        const fuzzy = r.fuzzy ? '（模糊命中，可能不是完全一样的那一条）' : ''
+        return { text: `已点「${r.text}」@ (${r.x}, ${r.y})${pages}${fuzzy}（${r.ms}ms）` }
       },
     }),
 
@@ -508,6 +560,9 @@ export function apply(ctx) {
           return { text: `会话已重建：坐标空间 ${r.logical?.[0]}×${r.logical?.[1]}` }
         }
         const r = await rpc('status', {}, 15000)
+        const agents = (r.remoteAgents || []).filter(
+          (a, i, all) => all.findIndex((b) => b.agent === a.agent) === i,
+        )
         return {
           text: [
             `会话：${r.alive ? '活着' : '没起来'}`,
@@ -515,7 +570,61 @@ export function apply(ctx) {
             `PipeWire 节点：${r.node ?? '-'}，已收 ${r.frames} 帧`,
             `JPEG 质量：${r.quality}`,
             `后端进程：${proc ? proc.pid : '未启动'}，运行 ${Math.round((Date.now() - bootedAt) / 1000)}s`,
+            agents.length
+              ? `本机远控在跑：${agents.map((a) => `${a.agent}(pid ${a.pid})`).join('、')}`
+                + ' —— 「接受远程控制/共享屏幕」那个弹窗是它们调 portal 时弹的，不是本插件；'
+                + '老是弹就打开它们的「无人值守/Wayland 免提示」设置，或直接关掉它们的传入连接。'
+              : '',
             lastError ? `最近的后端错误：\n${lastError.slice(-500)}` : '',
+          ].filter(Boolean).join('\n'),
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'wayland_dialogs',
+      description:
+        '查/关挡在最前面的系统授权弹窗（Wayland 屏幕共享、远程控制这类）。' +
+        'close=true 会按「取消」把它关掉（不会按「共享」，不会把屏幕交出去）。' +
+        '不带参数只查不动。注意：屏幕文字里出现「远程控制」不等于有弹窗，' +
+        '必须看到授权框的取消/共享按钮行才算。',
+      parameters: {
+        close: { type: 'boolean', description: '认出来就直接关掉' },
+      },
+      output: textOutput,
+      presentCall: present('Wayland dialogs'),
+      async execute(args) {
+        const r = await rpc('dialogs', { close: !!args.close }, 60000)
+        const agents = (r.agents || []).map((a) => a.agent).filter((v, i, a) => a.indexOf(v) === i)
+        if (!r.found) {
+          return {
+            text: [
+              '屏幕上没有屏幕共享/远程控制授权弹窗。',
+              agents.length ? `（本机在跑的远控：${agents.join('、')}）` : '',
+              r.weak?.length
+                ? `屏幕上只是出现了「${r.weak.join('、')}」这些字，但没看到授权框的按钮行 —— ` +
+                  '那多半是聊天正文/网页里的字，不是弹窗。'
+                : '',
+            ].filter(Boolean).join(''),
+          }
+        }
+        if (r.dismissed) {
+          return { text: `已关掉弹窗（点的按钮是「${r.button}」）。触发它的提示：${(r.mark || []).join('、')}` }
+        }
+        if (!args.close) {
+          return {
+            text: [
+              `屏幕上确实有授权弹窗（${(r.mark || []).join('、')}）`,
+              r.button ? `，按钮行是「${r.button}」` : '',
+              '。要关掉就把 close 设为 true。',
+              agents.length ? `\n本机在跑的远控：${agents.join('、')} —— 这类弹窗基本是它们调 portal 弹的。` : '',
+            ].filter(Boolean).join(''),
+          }
+        }
+        return {
+          text: [
+            `认到弹窗（${(r.mark || []).join('、')}），但没找到「取消/关闭」按钮，没敢乱点。`,
+            r.texts?.length ? `屏幕上的文字：\n${r.texts.join('\n')}` : '',
           ].filter(Boolean).join('\n'),
         }
       },

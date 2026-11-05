@@ -1,6 +1,6 @@
 {
   "name": "dsh-wayland-use",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH plugin: fast native desktop control on Wayland (GNOME/Mutter). Resident backend over RemoteDesktop + ScreenCast — sub-10ms input, screenshot in ~2ms, batch actions with one screenshot, click-by-text via OCR.",
   "type": "module",
   "license": "MIT",
